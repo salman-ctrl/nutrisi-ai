@@ -1,8 +1,6 @@
 # 🥗 Nutrisi.AI - Medical Grade Nutrition Assistant
 
-![Nutrisi.AI Banner](https://via.placeholder.com/1200x400.png?text=Nutrisi.AI+Dashboard+Preview)
-
-> *Ganti link gambar di atas dengan screenshot Dashboard aplikasi kamu yang paling keren.*
+![alt text](nutrisiAIfe/public/image.png)
 
 <div align="center">
 
