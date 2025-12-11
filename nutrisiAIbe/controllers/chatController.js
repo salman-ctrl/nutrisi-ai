@@ -46,7 +46,7 @@ exports.sendMessage = async (req, res) => {
         const conditionsText = medicalConditions.length > 0 
             ? medicalConditions.join(", ") 
             : "Tidak ada (Sehat)";
-
+   
         const age = calculateAge(userProfile.date_of_birth);
         const activityText = getActivityLabel(userProfile.activity_level);
 

@@ -1,10 +1,10 @@
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
-const FoodLog = require('../models/FoodLog'); // Pastikan path ini benar
+const { analyzeHealthRisk } = require('../utils/medicalExpert');
+const User = require('../models/User'); 
 
 exports.scanImage = async (req, res) => {
-    // 1. Cek apakah ada file
     if (!req.file) {
         return res.status(400).json({ 
             success: false, 
@@ -16,66 +16,104 @@ exports.scanImage = async (req, res) => {
     const imageUrl = `/uploads/${req.file.filename}`;
 
     try {
-        // 2. Kirim ke Python (AI Service)
+        // 1. Ambil Data Penyakit User
+        const user = await User.findByPk(req.user.id);
+        let userConditions = [];
+        if (user && user.medical_conditions) {
+            try {
+                userConditions = JSON.parse(user.medical_conditions);
+                if (typeof userConditions === 'string') userConditions = [userConditions];
+            } catch (e) {
+                userConditions = [];
+            }
+        }
+
+        // 2. Kirim ke Python AI
         const formData = new FormData();
         formData.append('image', fs.createReadStream(imagePath));
 
-        console.log("🤖 Mengirim ke AI Service...");
-        
-        // Pastikan port Python benar (default 5001)
         const mlResponse = await axios.post('http://127.0.0.1:5001/predict', formData, {
             headers: { ...formData.getHeaders() }
         });
 
-        const aiData = mlResponse.data;
-        console.log("✅ Data dari AI:", aiData);
+        const aiResult = mlResponse.data;
 
-        // 3. Cek hasil deteksi
-        if (aiData.food_name === "Tidak Dikenali") {
-            // Hapus file agar tidak menumpuk (opsional)
-            // fs.unlinkSync(imagePath); 
-            
+        // 3. Cek Hasil AI
+        if (!aiResult.success || !aiResult.items || aiResult.items.length === 0) {
             return res.json({
                 success: false,
                 message: "Makanan tidak dikenali.",
-                data: {
-                    food_name: "Tidak Dikenali",
-                    grade: "D",
-                    image_url: imageUrl
-                }
+                data: null
             });
         }
 
-        // 4. SIMPAN KE DATABASE (Sesuai Model FoodLog Anda)
-        const newLog = await FoodLog.create({
-            user_id: req.user.id,        // Dari authMiddleware
-            food_name: aiData.food_name,
-            calories: aiData.calories,
-            protein_g: aiData.protein_g, // Sesuai model
-            carbs_g: aiData.carbs_g,     // Sesuai model
-            fat_g: aiData.fat_g,         // Sesuai model
-            sugar_g: aiData.sugar_g,     // Sesuai model
-            salt_mg: aiData.salt_mg,     // Sesuai model
-            fiber_g: aiData.fiber_g,     // Sesuai model
-            grade: aiData.grade,
-            image_url: imageUrl
+        // 4. LOGIKA AGREGASI (Hitung Total Nutrisi)
+        const items = aiResult.items;
+        
+        let totalStats = {
+            calories: 0,
+            protein_g: 0,
+            carbs_g: 0,
+            fat_g: 0,
+            sugar_g: 0,
+            salt_mg: 0,
+            fiber_g: 0
+        };
+
+        const itemNames = [];
+        let calculatedGrade = 'A'; 
+
+        items.forEach(item => {
+            itemNames.push(item.food_name.replace(/_/g, ' '));
+            
+            totalStats.calories += item.calories;
+            totalStats.protein_g += item.protein_g;
+            totalStats.carbs_g += item.carbs_g;
+            totalStats.fat_g += item.fat_g;
+            totalStats.sugar_g += item.sugar_g;
+            totalStats.salt_mg += item.salt_mg;
+            totalStats.fiber_g += item.fiber_g;
+
+            // Logika Grade Nutrisi (A/B/C/D)
+            if (item.grade === 'D') calculatedGrade = 'D';
+            else if (item.grade === 'C' && calculatedGrade !== 'D') calculatedGrade = 'C';
+            else if (item.grade === 'B' && calculatedGrade === 'A') calculatedGrade = 'B';
         });
 
-        // 5. Kirim Response Sukses
-        return res.status(201).json({
+        // 5. LOGIKA MEDIS (Cek Risiko Penyakit)
+        const healthAnalysis = analyzeHealthRisk(items, userConditions);
+
+        // Jika dokter bilang berbahaya, paksa Grade jadi D
+        if (!healthAnalysis.isSafe) {
+            calculatedGrade = 'D';
+        }
+
+        // Buat Nama Gabungan
+        const compositeName = items.length > 1 
+            ? `Mix: ${itemNames.slice(0, 3).join(', ')}${itemNames.length > 3 ? '...' : ''}`
+            : itemNames[0];
+
+        // 6. Susun Data Final
+        const finalData = {
+            food_name: compositeName,
+            ...totalStats,           // Data Total Kalori dll
+            grade: calculatedGrade,
+            image_url: imageUrl,
+            detected_items: items,   // Rincian per item
+            health_risk: healthAnalysis // Hasil diagnosa dokter
+        };
+
+        return res.status(200).json({
             success: true,
-            message: "Scan berhasil disimpan!",
-            data: newLog
+            message: "Scan berhasil!",
+            data: finalData
         });
 
     } catch (error) {
-        console.error("❌ Error Scan:", error.message);
-        
-        // Tangani jika Server Python Mati
         if (error.code === 'ECONNREFUSED') {
             return res.status(503).json({ 
                 success: false, 
-                message: "Layanan AI sedang offline. Pastikan 'python app.py' berjalan." 
+                message: "Layanan AI offline. Pastikan python app.py berjalan." 
             });
         }
 

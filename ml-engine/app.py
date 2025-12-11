@@ -14,34 +14,37 @@ def predict():
 
     file = request.files['image']
     img_bytes = file.read()
-    img = Image.open(io.BytesIO(img_bytes))
 
-    results = model(img)
-    detected_food = "Tidak dikenali"
-    highest_conf = 0.0
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
 
-    for result in results:
-        for box in result.boxes:
-            conf = float(box.conf[0])
-            cls = int(box.cls[0])
-            label = model.names[cls]
-            if conf > highest_conf:
-                highest_conf = conf
-                detected_food = label
+        # Tuning Agresif untuk menangkap semua objek di piring
+        results = model(img, conf=0.05, iou=0.50, imgsz=640, agnostic_nms=True)
+        
+        detected_items = []
+        
+        for result in results:
+            for box in result.boxes:
+                cls = int(box.cls[0])
+                label = model.names[cls]
+                conf = float(box.conf[0])
+                
+                nutrition = get_nutrition_info(label)
+                
+                detected_items.append({
+                    "food_name": label,
+                    "confidence": conf,
+                    **nutrition
+                })
 
-    if highest_conf < 0.4:
         return jsonify({
-            "food_name": "Tidak Dikenali",
-            "calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0,
-            "sugar_g": 0, "salt_mg": 0, "fiber_g": 0, "grade": "D"
+            "success": True,
+            "message": "Deteksi selesai",
+            "items": detected_items
         })
 
-    nutrition_info = get_nutrition_info(detected_food)
-    response_data = {
-        "food_name": detected_food.replace("_", " ").title(),
-        **nutrition_info
-    }
-    return jsonify(response_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001)
